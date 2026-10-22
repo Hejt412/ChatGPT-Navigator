@@ -97,3 +97,27 @@ test('partial ancestry stays incomplete, older graph pages merge while preservin
   const switched=model.mergeSnapshots(merged,model.projectConversation(all,'sample'));
   assert.deepEqual(model.entriesFromSnapshot(switched).map(item=>item.messageId),['message-q1','message-other']);
 });
+
+test('a fresh tail snapshot retains previously indexed parents when the active branch grows', () => {
+  const all=conversation();
+  const first=model.projectConversation({id:'sample',current_node:'a1',mapping:{root:all.mapping.root,q1:all.mapping.q1,a1:all.mapping.a1}},'sample');
+  const tail=model.projectConversation({id:'sample',current_node:'a2',mapping:{q2:all.mapping.q2,a2:all.mapping.a2}},'sample');
+  const merged=model.mergeSnapshots(first,tail);
+  assert.equal(merged.complete,true);
+  assert.equal(merged.currentNode,'a2');
+  assert.deepEqual(model.entriesFromSnapshot(merged).map(item=>item.messageId),['message-q1','message-q2']);
+});
+
+test('exact conversation query keys recover id-less cached pages and reject other identities', () => {
+  const all=conversation();
+  const pages=[
+    {current_node:'a2',mapping:{q2:all.mapping.q2,a2:all.mapping.a2}},
+    {current_node:'a1',mapping:{root:all.mapping.root,q1:all.mapping.q1,a1:all.mapping.a1}}
+  ];
+  const result=model.snapshotIn({queryKey:['conversation','sample'],state:{data:{pages}}},'sample');
+  assert.equal(result.complete,true);
+  assert.deepEqual(model.entriesFromSnapshot(result).map(item=>item.messageId),['message-q1','message-q2']);
+  assert.equal(model.snapshotIn({queryKey:['conversation','other'],state:{data:{pages}}},'sample'),null);
+  pages[0].id='other';pages.pop();
+  assert.equal(model.snapshotIn({queryKey:['conversation','sample'],state:{data:{pages}}},'sample'),null);
+});

@@ -160,7 +160,7 @@ const fixture = messages => `<!doctype html><html><head><meta charset="UTF-8"><s
     await page.evaluate(source);
     await expectCount(1, '切换到另一个新版结构的旧对话');
     assert.equal(await page.evaluate(() => document.getElementById('chatgpt-right-rail-extension') === window.legacyHost), true);
-    assert.equal(await page.locator(hostSelector).getAttribute('data-version'), '2.2.1');
+    assert.equal(await page.locator(hostSelector).getAttribute('data-version'), '2.3.0');
     console.log('PASS: upgrade replaces the legacy refresh handler and reuses its host');
 
     await load(classic('恢复已有导航 DOM', 0));

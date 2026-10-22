@@ -136,6 +136,26 @@ test('diagnostics disclose only sanitized counters and do not start history load
   assert.equal(started,0);
   assert.equal(app.pending.length,0);
   assert.equal(app.messages[0].message.type,'diagnostics');
-  assert.equal(app.messages[0].message.diagnostics.bridgeVersion,'2.2.1');
+  assert.equal(app.messages[0].message.diagnostics.bridgeVersion,'2.3.0');
   assert.equal(app.messages[0].message.diagnostics.history.pagesTriggered,0);
+});
+
+test('native navigation validates the current user message and acknowledges only after the native action completes', async () => {
+  const app=setup();
+  const pending=app.window.fetch('/backend-api/conversation/chat');
+  app.pending[0].resolve(response('实际问题'));await pending;
+  await new Promise(resolve=>setTimeout(resolve,30));app.request();
+  const calls=[];let finish;
+  const owner={scrollToMessage(id){calls.push({id,owner:this});return new Promise(resolve=>{finish=resolve;});}};
+  app.window.__chatgptRailPageState={controls:()=>({navigator:{owner,call:owner.scrollToMessage}})};
+  const send=messageId=>[...app.listeners].forEach(fn=>fn({source:app.window,origin:app.window.location.origin,data:{
+    channel:'chatgpt-navigator-v2',type:'navigate',nonce:'valid-session-12345678',conversationId:'chat',
+    messageId,requestId:'native-request-12345678'
+  }}));
+  send('unknown-user');assert.equal(calls.length,0);
+  send('user-id');assert.equal(calls.length,1);assert.equal(calls[0].owner,owner);
+  assert.equal(app.messages.filter(item=>item.message.type==='navigation').length,0);
+  finish();await waitFor(()=>app.messages.some(item=>item.message.type==='navigation'));
+  assert.equal(app.messages.at(-1).message.handled,true);
+  assert.equal(app.messages.at(-1).message.requestId,'native-request-12345678');
 });

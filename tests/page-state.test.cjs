@@ -65,3 +65,27 @@ test('binds a message graph to the explicit conversationId of its component with
   element['__reactFiber$test'].memoizedProps={conversationId:'chat',cache:{conversation:graph}};
   assert.equal(reader.read(model,doc(element),'chat'),null);
 });
+
+test('discovers only explicitly scoped history and message navigation actions without invoking getters or functions', () => {
+  let calls=0;
+  const fetchPreviousPage=()=>calls++,scrollToMessage=()=>calls++;
+  const history={hasPreviousPage:true,isFetchingPreviousPage:true,fetchPreviousPage};
+  Object.defineProperty(history,'loadOlderMessages',{get(){throw new Error('must not read getter');}});
+  const element={'__reactFiber$controls':{memoizedProps:{conversationId:'chat',history,navigation:{scrollToMessage},
+    unrelated:{hasPreviousPage:true,fetchPreviousPage(){throw new Error('wrong scope');}}}}};
+  const controls=reader.controls(doc(element),'chat');
+  assert.equal(controls.pager.call,fetchPreviousPage);
+  assert.equal(controls.pager.owner,history);
+  assert.equal(controls.pager.busy,true);
+  assert.equal(controls.navigator.call,scrollToMessage);
+  assert.equal(reader.controls(doc(element),'other').pager,null);
+  assert.equal(calls,0);
+});
+
+test('pagination in the current component hook works, arbitrary unscoped query callbacks stay inaccessible', () => {
+  const pager={hasPreviousPage:true,fetchPreviousPage(){}};
+  const fiber={memoizedProps:{conversationId:'chat'},memoizedState:{memoizedState:pager,next:null}};
+  assert.equal(reader.controls(doc({'__reactFiber$x':fiber}),'chat').pager.call,pager.fetchPreviousPage);
+  delete fiber.memoizedProps;
+  assert.equal(reader.controls(doc({'__reactFiber$x':fiber}),'chat').pager,null);
+});

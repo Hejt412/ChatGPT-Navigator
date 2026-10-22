@@ -161,8 +161,9 @@
       return false;
     };
     // 较早分页的叶节点属于当前路径时，保留已有的最新叶节点。分支切换则用新快照。
-    if (!isAncestor(next.currentNode, previous.currentNode)) return next;
-    const currentNode = previous.currentNode;
+    const earlierPage = isAncestor(next.currentNode, previous.currentNode);
+    if (!earlierPage && !isAncestor(previous.currentNode, next.currentNode)) return next;
+    const currentNode = earlierPage ? previous.currentNode : next.currentNode;
     let rooted = false;
     const seen = new Set();
     for (let node = nodes.get(currentNode); node && !seen.has(node.id); node = nodes.get(node.parent)) {
@@ -177,7 +178,14 @@
     const queue = [root], visited = new Set();
     let best = null;
     const remember = result => {
-      if (result && (!best || Number(result.complete) > Number(best.complete))) best = result;
+      if (best && result && (best.currentNode === result.currentNode ||
+          best.nodes.some(node => node.id === result.currentNode || node.parent === result.currentNode) ||
+          result.nodes.some(node => node.id === best.currentNode || node.parent === best.currentNode))) {
+        const merged = mergeSnapshots(best, result);
+        if (merged.nodes.length >= best.nodes.length && merged.nodes.length >= result.nodes.length) result = merged;
+      }
+      if (result && (!best || Number(result.complete) > Number(best.complete) ||
+          result.complete === best.complete && result.nodes.length > best.nodes.length)) best = result;
     };
     for (let at = 0; at < queue.length && at < 2500; at++) {
       const value = queue[at];
@@ -217,6 +225,25 @@
             remember(projectConversation({ ...graph, conversation_id: expectedId }, expectedId));
           }
         } catch { /* 不调用缓存访问器。 */ }
+      }
+      // TanStack Query 的对话 ID 可以只在 queryKey 中；只绑定精确匹配的该条查询。
+      const queryKey = descriptors.queryKey?.value;
+      if (Array.isArray(queryKey) && queryKey.length === 2 &&
+          /^(?:conversation|conversation-history|conversation-messages)$/.test(queryKey[0]) && queryKey[1] === expectedId) {
+        const state = descriptors.state?.value;
+        let data;
+        try { data = descriptors.data?.value || Object.getOwnPropertyDescriptor(state || {}, 'data')?.value; } catch { /* 不读访问器。 */ }
+        const pages = data && typeof data === 'object' ? Object.getOwnPropertyDescriptor(data, 'pages')?.value : null;
+        for (const page of Array.isArray(pages) ? pages.slice(0, 200) : [data]) {
+          if (!page || typeof page !== 'object') continue;
+          try {
+            const fields = Object.getOwnPropertyDescriptors(page);
+            const pageId = fields.conversationId?.value || fields.conversation_id?.value || fields.id?.value;
+            if (pageId && pageId !== expectedId) continue;
+            const graph = Object.fromEntries(Object.entries(fields).filter(([, item]) => 'value' in item).map(([key, item]) => [key, item.value]));
+            remember(projectConversation({ ...graph, conversation_id: expectedId }, expectedId));
+          } catch { /* 未知分页结构由其他数据源接替。 */ }
+        }
       }
       try {
         for (const child of Map.prototype.values.call(value)) {

@@ -23,6 +23,11 @@ function nativeFixture(id) {
     unrelated.style.cssText='position:absolute;top:0;left:0;height:10px';space.append(unrelated);
     new IntersectionObserver(entries=>{if(entries.some(item=>item.isIntersecting))window.unrelatedVisibleCallbacks++;},{root:scroll}).observe(unrelated);
     function armHistory(){
+      if(${JSON.stringify(id)}==='react-pager'){
+        provider.memoizedProps.history={hasPreviousPage:firstKnown>0,isFetchingPreviousPage:inFlight,fetchPreviousPage:loadOlder};
+        sentinel.remove();return;
+      }
+      if(${JSON.stringify(id)}==='reused-observer'&&historyObserver){if(!firstKnown)sentinel.remove();return;}
       historyObserver?.disconnect();
       if(!firstKnown){sentinel.remove();return;}
       historyObserver=new IntersectionObserver(entries=>{if(entries.some(item=>item.isIntersecting))loadOlder();},{root:scroll,rootMargin:'80px 0px 0px 0px'});
@@ -31,6 +36,7 @@ function nativeFixture(id) {
     function loadOlder(){
       if(inFlight||!firstKnown)return;
       inFlight=true;window.nativeHistoryCalls++;
+      if(provider.memoizedProps.history)provider.memoizedProps.history.isFetchingPreviousPage=true;
       const xhr=new XMLHttpRequest();xhr.open('GET','/backend-api/conversation/${id}?before='+firstKnown);xhr.responseType='json';
       xhr.onload=()=>{
         if(xhr.status!==200){inFlight=false;sentinel.textContent='重试';return;}
@@ -103,6 +109,18 @@ async function run() {
     assert.equal(await page.evaluate(()=>window.nativeHistoryCalls),7);
     assert.equal(await page.evaluate(()=>window.chatScrollCommands),0);
     console.log('PASS: a history target observed before its text and DOM attachment still loads all older pages');
+
+    await load('reused-observer');
+    await complete();
+    assert.equal(await page.evaluate(()=>window.nativeHistoryCalls),7);
+    assert.equal(await page.evaluate(()=>window.chatScrollCommands),0);
+    console.log('PASS: the same observer and sentinel load all seven pages, with each next call gated on index progress');
+
+    await load('react-pager');
+    await complete();
+    assert.equal(await page.evaluate(()=>window.nativeHistoryCalls),7);
+    assert.equal(await page.evaluate(()=>window.chatScrollCommands),0);
+    console.log('PASS: committed native pagination callback reads all pages without a history sentinel or observer');
 
     await load('pause');
     await page.waitForFunction(()=>document.getElementById('chatgpt-right-rail-extension').shadowRoot.querySelector('.history-control').dataset.state==='native');

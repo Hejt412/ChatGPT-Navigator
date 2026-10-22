@@ -1,7 +1,7 @@
 /* MAIN world：观察当前聊天 JSON，协调网页自身的历史加载器；不读取认证信息。 */
 (() => {
   'use strict';
-  const VERSION = '2.2.1';
+  const VERSION = '2.3.0';
   const model = window.__chatgptRailModel;
   if (!model) return;
   if (window.__chatgptRailBridge?.version === VERSION) return;
@@ -21,7 +21,7 @@
 
   function currentRequest(url, method) {
     if (method !== 'GET' || url.origin !== location.origin) return null;
-    const match = url.pathname.match(/^\/backend-(?:api|anon)\/conversation\/([a-zA-Z0-9_-]+)\/?$/);
+    const match = url.pathname.match(/^\/backend-(?:api|anon)\/conversation\/([a-zA-Z0-9_-]+)(?:\/messages)?\/?$/);
     return match && match[1] === model.conversationId(location.href) ? match[1] : null;
   }
 
@@ -131,7 +131,7 @@
   function onMessage(event) {
     if (event.source !== window || event.origin !== location.origin) return;
     const message = event.data;
-    if (!message || message.channel !== CHANNEL || !['request', 'cancel', 'diagnose'].includes(message.type) ||
+    if (!message || message.channel !== CHANNEL || !['request', 'cancel', 'diagnose', 'navigate'].includes(message.type) ||
         typeof message.nonce !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(message.nonce)) return;
     const id = model.conversationId(location.href);
     if (!id || message.conversationId !== id) return;
@@ -141,6 +141,23 @@
       requestedId = id;
     }
     nonce = message.nonce;
+    if (message.type === 'navigate') {
+      // 只允许定位当前消息图的可见用户消息；网页自己的动作负责挂载目标。
+      if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(message.requestId) ||
+          typeof message.messageId !== 'string' || !cached || !model.entriesFromSnapshot(cached).some(entry => entry.messageId === message.messageId)) return;
+      const replyNonce = nonce;
+      const reply = handled => {
+        if (!disposed && nonce === replyNonce && model.conversationId(location.href) === id) window.postMessage({
+          channel: CHANNEL, type: 'navigation', nonce: replyNonce, conversationId: id, requestId: message.requestId, handled
+        }, location.origin);
+      };
+      try {
+        const navigator = window.__chatgptRailPageState?.controls(document, id).navigator;
+        if (navigator) Promise.resolve(Reflect.apply(navigator.call, navigator.owner, [message.messageId])).then(() => reply(true), () => reply(false));
+        else reply(false);
+      } catch { reply(false); }
+      return;
+    }
     if (message.type === 'diagnose') {
       const state = {};
       try { window.__chatgptRailPageState?.read(model, document, id, state); } catch { state.probeFailed = true; }
@@ -158,7 +175,7 @@
     window.__chatgptRailHistory?.start(id, state => notifyStatus(id, state), () => {
       if (Date.now() - lastPageProbe > 700) { lastPageProbe = Date.now(); discover(id); }
       return cached?.conversationId === id && cached.complete;
-    }, message.force === true);
+    }, message.force === true, () => cached?.conversationId === id ? `${cached.nodes.length}:${cached.currentNode}` : '');
   }
 
   window.addEventListener('message', onMessage);

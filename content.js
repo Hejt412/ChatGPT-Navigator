@@ -1,12 +1,12 @@
 /*
- * ChatGPT 问题导航 v2.2.1
+ * ChatGPT 问题导航 v2.3.0
  * 优先使用网页已加载的对话数据，只索引当前分支；页面扫描作为兼容方案。
  * 消息索引只在内存中，本地书签只保存消息标识；历史分页由网页自身执行。
  */
 (() => {
   'use strict';
 
-  const VERSION = '2.2.1';
+  const VERSION = '2.3.0';
   const Model = window.__chatgptRailModel;
   const DATA_CHANNEL = 'chatgpt-navigator-v2';
   const previousInstance = window.__chatgptRightRailLoaded;
@@ -79,6 +79,7 @@
   let diagnosticText = null;
   let diagnosticTimer = 0;
   let bridgeDiagnostics = null;
+  let pendingNavigation = null;
 
   const css = `
     :host { all: initial; position: fixed; inset: 0; z-index: 2147483000; pointer-events: none; color-scheme: light; }
@@ -571,8 +572,12 @@
   function onSnapshot(event) {
     if (!Model || event.source !== window || event.origin !== location.origin || disposed) return;
     const message = event.data;
-    if (!message || message.channel !== DATA_CHANNEL || !['snapshot', 'status', 'diagnostics'].includes(message.type) || message.nonce !== dataNonce ||
+    if (!message || message.channel !== DATA_CHANNEL || !['snapshot', 'status', 'diagnostics', 'navigation'].includes(message.type) || message.nonce !== dataNonce ||
         Model.conversationId(location.href) !== dataRouteId) return;
+    if (message.type === 'navigation') {
+      if (message.conversationId === dataRouteId && message.requestId === pendingNavigation?.requestId && typeof message.handled === 'boolean') pendingNavigation.finish(message.handled);
+      return;
+    }
     if (message.type === 'diagnostics') {
       if (message.conversationId !== dataRouteId || !message.diagnostics || typeof message.diagnostics !== 'object') return;
       // 只保留预先定义的计数 / 布尔值；页面消息不能把任意内容混入复制结果。
@@ -604,7 +609,8 @@
     const snapshot = Model.normalizeSnapshot(message.snapshot, dataRouteId);
     if (!snapshot) return;
     if (manualHistoryIndex && !snapshot.complete) return;
-    cancelHistory(true);
+    // 历史分页 / 流式状态更新不能取消用户正在进行的消息定位。
+    if (historyTask?.kind === 'index') cancelHistory(true);
     dataSnapshot = snapshot;
     if (snapshot.complete) { nativeHistoryState = 'complete'; manualHistoryIndex = false; }
     scanNow();
@@ -1035,6 +1041,7 @@
   }
 
   function cancelHistory(restore) {
+    pendingNavigation?.finish(false);
     window.clearTimeout(historyTimer);
     historyTimer = 0;
     if (historyTask) {
@@ -1142,43 +1149,44 @@
     const initialAnchor = scrollAnchorFor(entry);
     const container = initialAnchor ? scrollContainerFor(initialAnchor) : historyContainer();
     if (!container) return;
-    const task = { kind: 'seek', container, url: location.href, cancelled: false, restore: false, deadline: Date.now() + 30000 };
+    const task = { kind: 'seek', container, url: location.href, cancelled: false, restore: false,
+      saved: rememberPosition(container), deadline: Date.now() + 10000 };
+    let located = false;
     historyTask = task;
     updateHistoryControl();
     try {
-      if (initialAnchor && await alignEntry(task, key)) return;
+      if (initialAnchor && await alignEntry(task, key)) { located = true; return; }
       if (!taskActive(task)) return;
-      if (dataSnapshot && await seekDataEntry(task, key)) return;
+      if (dataSnapshot && entry.messageId && Model) {
+        await new Promise(resolve => {
+          const requestId = crypto.randomUUID();
+          const finish = result => {
+            if (pendingNavigation?.requestId !== requestId) return;
+            window.clearTimeout(pendingNavigation.timer); pendingNavigation = null; resolve(result);
+          };
+          pendingNavigation = { requestId, task, finish, timer: window.setTimeout(() => finish(false), 1200) };
+          window.postMessage({ channel: DATA_CHANNEL, type: 'navigate', conversationId: dataRouteId,
+            nonce: dataNonce, messageId: entry.messageId, requestId }, location.origin);
+        });
+        if (!taskActive(task) || !await settleHistory(task, 120)) return;
+        if (await alignEntry(task, key)) { located = true; return; }
+      }
+      if ((dataSnapshot || historyComplete) && await seekDataEntry(task, key)) { located = true; return; }
       if (!taskActive(task)) return;
       const height = scrollViewport(container).height;
       // 优先使用已记录的位置，使卸载的问题重新进入页面 DOM。
-      for (const offset of [0, -1, 1, -2, 2]) {
+      for (const offset of [0, -0.5, 0.5]) {
         if (!taskActive(task)) return;
+        if (entry.source === 'data' && !entry.positionKnown) break;
         container.scrollTo({ top: Math.max(0, entry.position + offset * height - 60), behavior: 'instant' });
         if (!await settleHistory(task, 150)) return;
-        if (await alignEntry(task, key)) return;
+        if (await alignEntry(task, key)) { located = true; return; }
       }
-      // 动态高度发生较大变化时，顺序寻找目标；始终只操作当前聊天。
-      if (!taskActive(task)) return;
-      container.scrollTo({ top: 0, behavior: 'instant' });
-      for (let step = 0; step < 3000 && taskActive(task); step++) {
-        if (!await settleHistory(task)) return;
-        if (await alignEntry(task, key)) return;
-        if (!taskActive(task)) return;
-        const viewport = scrollViewport(container);
-        if (container.scrollTop >= container.scrollHeight - viewport.height - 2) {
-          if (!dataSnapshot) {
-            entries = entries.filter(item => item.key !== key);
-            historyComplete = false;
-            renderRail();
-          }
-          navigationNotice = '该问题暂时未显示在页面中，可刷新聊天后重试';
-          return;
-        }
-        container.scrollTo({ top: container.scrollTop + viewport.height * 0.8, behavior: 'instant' });
-      }
+      navigationNotice = '该问题尚未挂载，已保留阅读位置；可重试读取历史后再定位';
     } finally {
       if (!task.cancelled && Date.now() >= task.deadline) navigationNotice = '定位超时，可刷新聊天或补全历史后重试';
+      // 失败保留目录与原阅读位置；绝不以从头逐屏遍历作为点击的兜底。
+      if (!located && !task.cancelled && historyTask === task) restorePosition(task);
       if (historyTask === task) historyTask = null;
       updateHistoryControl();
     }
@@ -1189,22 +1197,25 @@
     if (!wanted) return false;
     const viewport = scrollViewport(task.container);
     let low = 0, high = Math.max(0, task.container.scrollHeight - viewport.height);
-    let position = wanted.positionKnown ? wanted.position : wanted.ordinal / Math.max(1, entries.length - 1) * high;
-    for (let attempt = 0; attempt < 18 && taskActive(task); attempt++) {
+    let position = wanted.positionKnown || wanted.source !== 'data' ? wanted.position : entries.indexOf(wanted) / Math.max(1, entries.length - 1) * high;
+    for (let attempt = 0; attempt < 12 && taskActive(task); attempt++) {
       task.container.scrollTo({ top: Math.max(low, Math.min(high, position)), behavior: 'instant' });
       if (!await settleHistory(task, 150)) return false;
       if (await alignEntry(task, key)) return true;
       if (!taskActive(task)) return false;
-      const live = entries.filter(entry => scrollAnchorFor(entry));
+      const live = entries.map((entry, index) => ({ entry, index })).filter(item => scrollAnchorFor(item.entry));
       if (live.length) {
-        const first = live[0].ordinal, last = live.at(-1).ordinal;
-        if (wanted.ordinal < first) high = Math.min(high, task.container.scrollTop);
-        else if (wanted.ordinal > last) low = Math.max(low, task.container.scrollTop);
+        const first = live[0].index, last = live.at(-1).index;
+        const wantedIndex = entries.findIndex(entry => entry.key === key);
+        if (wantedIndex < first) high = Math.min(high, task.container.scrollTop);
+        else if (wantedIndex > last) low = Math.max(low, task.container.scrollTop);
         else break;
-      } else if (position >= high - 2) high = position;
-      else { low = Math.max(low, position - viewport.height); high = Math.min(high, position + viewport.height); }
+      } else {
+        // 整屏可能只有长回答；没有用户锚点时不能据此错误缩小目标区间。
+        break;
+      }
       const next = (low + high) / 2;
-      if (high - low < viewport.height * 0.5 || Math.abs(next - position) < 2) break;
+      if (high - low < 2 || Math.abs(next - position) < 2) break;
       position = next;
     }
     return false;
