@@ -38,17 +38,21 @@ test('install/update injects content into already open chats and skips discarded
   const app = setup({ tabs: [{ id: 1 }, { id: 2, discarded: true }, { id: 3 }, {}] });
   await app.listeners.installed({ reason: 'install' });
   assert.deepEqual(Array.from(app.queries[0].url), ['https://chatgpt.com/*', 'https://chat.openai.com/*']);
-  assert.deepEqual(app.injections.map(item => item.target.tabId), [1, 3]);
-  assert.ok(app.injections.every(item => item.files.length === 1 && item.files[0] === 'content.js'));
+  assert.deepEqual(app.injections.filter(item => item.world === 'MAIN').map(item => item.target.tabId), [1, 3]);
+  assert.deepEqual(app.injections.filter(item => item.world === 'ISOLATED').map(item => item.target.tabId), [1, 3]);
+  assert.ok(app.injections.every(item => item.files[0] === 'conversation-model.js'));
+  assert.ok(app.injections.filter(item => item.world === 'MAIN').every(item => item.files[1] === 'history-loader.js' && item.files[2] === 'page-state.js' && item.files[3] === 'page-bridge.js'));
+  assert.ok(app.injections.filter(item => item.world === 'ISOLATED').every(item => item.files[1] === 'content.js'));
   app.injections.length = 0;
   await app.listeners.installed({ reason: 'update' });
-  assert.deepEqual(app.injections.map(item => item.target.tabId), [1, 3]);
+  assert.deepEqual(app.injections.filter(item => item.world === 'ISOLATED').map(item => item.target.tabId), [1, 3]);
 });
 
 test('a closed or inaccessible tab does not stop injection into other chats', async () => {
   const app = setup({ tabs: [{ id: 1 }, { id: 2 }], failTab: 1 });
   await app.listeners.installed();
-  assert.deepEqual(app.injections.map(item => item.target.tabId), [1, 2]);
+  assert.deepEqual(app.injections.filter(item => item.world === 'MAIN').map(item => item.target.tabId), [1, 2]);
+  assert.deepEqual(app.injections.filter(item => item.world === 'ISOLATED').map(item => item.target.tabId), [2]);
   assert.equal(app.warnings.length, 1);
 });
 
@@ -68,7 +72,7 @@ test('toolbar click reinjects only on supported ChatGPT origins', async () => {
     await app.listeners.clicked({ id: 5, url });
   }
   await app.listeners.clicked({ url: 'https://chatgpt.com/' });
-  assert.deepEqual(app.injections.map(item => item.target.tabId), [5, 5]);
+  assert.deepEqual(app.injections.filter(item => item.world === 'ISOLATED').map(item => item.target.tabId), [5, 5]);
 });
 
 test('toolbar injection errors are handled', async () => {
@@ -81,7 +85,12 @@ test('manifest declares injection and toolbar entry points with site-scoped perm
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   assert.equal(manifest.background.service_worker, 'background.js');
   assert.ok(manifest.action.default_title);
-  assert.deepEqual(manifest.permissions, ['scripting']);
+  assert.deepEqual(manifest.permissions, ['scripting', 'storage']);
   assert.deepEqual(manifest.host_permissions, manifest.content_scripts[0].matches);
-  assert.deepEqual(manifest.content_scripts[0].js, ['content.js']);
+  assert.deepEqual(manifest.content_scripts[0].js, ['conversation-model.js', 'history-loader.js', 'page-state.js', 'page-bridge.js']);
+  assert.equal(manifest.content_scripts[0].world, 'MAIN');
+  assert.equal(manifest.content_scripts[0].run_at, 'document_start');
+  assert.deepEqual(manifest.content_scripts[1].js, ['conversation-model.js', 'content.js']);
+  assert.equal(manifest.content_scripts[1].world, 'ISOLATED');
+  assert.deepEqual(manifest.host_permissions, manifest.content_scripts[1].matches);
 });

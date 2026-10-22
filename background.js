@@ -1,4 +1,4 @@
-/* 安装或更新后，为已经打开的 ChatGPT 页面补上导航，无需刷新对话。 */
+/* 为已打开的页面补上导航；更新后刷新一次页面，可在网页初始化时接入历史加载器。 */
 'use strict';
 
 const CHATGPT_URLS = ['https://chatgpt.com/*', 'https://chat.openai.com/*'];
@@ -6,7 +6,13 @@ const CHATGPT_URLS = ['https://chatgpt.com/*', 'https://chat.openai.com/*'];
 async function injectRail(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ['content.js']
+    world: 'MAIN',
+    files: ['conversation-model.js', 'history-loader.js', 'page-state.js', 'page-bridge.js']
+  });
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'ISOLATED',
+    files: ['conversation-model.js', 'content.js']
   });
 }
 
