@@ -233,18 +233,18 @@ async function run() {
     await tooltip.waitFor({ state: 'visible' });
     await page.waitForTimeout(220);
     const widths=await page.locator(`${host} .dash`).evaluateAll(nodes=>nodes.slice(10,15).map(node=>node.getBoundingClientRect().width));
-    for(let i=0;i<widths.length;i++) assert.ok(Math.abs(widths[i]-[26,20,14,10,6][i])<.2, '悬停及相邻三条横线按距离展开');
+    for(let i=0;i<widths.length;i++) assert.ok(Math.abs(widths[i]-[26,20,16,12,10][i])<.2, '悬停及相邻三条横线按距离展开');
     await marks.nth(11).hover();
     await page.waitForFunction(() => document.getElementById('chatgpt-right-rail-extension').shadowRoot.querySelector('.tooltip-text').textContent==='数据问题 12');
     await page.waitForTimeout(200);
     assert.ok(await tooltip.isVisible());
     fs.mkdirSync(path.join(project, 'test-results'), { recursive: true });
-    await page.screenshot({ path: path.join(project, 'test-results', 'navigator-2.5.0.png') });
+    await page.screenshot({ path: path.join(project, 'test-results', 'navigator-2.5.1.png') });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     assert.equal(await page.locator(`${host} .dash`).first().evaluate(node => getComputedStyle(node).transitionDuration), '0s');
     assert.deepEqual(failures, []);
     console.log('PASS: delayed React cache yields all 40 entries with zero indexing scrolls and zero requests; Codex-style hover wave, follow preview, reduced motion');
-    console.log('PASS: bootstrap fallback, no browser errors; preview saved to test-results/navigator-2.5.0.png');
+    console.log('PASS: bootstrap fallback, no browser errors; preview saved to test-results/navigator-2.5.1.png');
   } finally { await browser.close(); }
 }
 

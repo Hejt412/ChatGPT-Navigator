@@ -1,12 +1,12 @@
 /*
- * ChatGPT 问题导航 v2.5.0
+ * ChatGPT 问题导航 v2.5.1
  * 优先使用网页已加载的对话数据，只索引当前分支；页面扫描作为兼容方案。
  * 导航摘要按对话保存于扩展本地存储；历史分页由网页自身执行。
  */
 (() => {
   'use strict';
 
-  const VERSION = '2.5.0';
+  const VERSION = '2.5.1';
   const Model = window.__chatgptRailModel;
   const MemoryStore = window.__chatgptRailMemory?.storage(globalThis.chrome?.storage?.local, globalThis.chrome?.runtime);
   const Memory = window.__chatgptRailMemory?.create(Model, MemoryStore);
@@ -113,6 +113,7 @@
     .rail::-webkit-scrollbar { display: none; }
     .rail[hidden], .tooltip[hidden] { display: none !important; }
     .mark {
+      --dash-rest: .384615;
       display: flex;
       flex: 0 0 10px;
       width: 34px;
@@ -136,17 +137,18 @@
       width: 26px;
       background: currentColor;
       opacity: .55;
-      transform: scaleX(var(--dash-scale, .230769));
+      transform: scaleX(var(--dash-scale, var(--dash-rest)));
       transform-origin: right center;
       transition: transform 160ms linear(0, .398 10%, .682 20%, .843 30%, .925 40%, .972 50%, 1.004 60%, 1.008 70%, 1.003 80%, 1), opacity 120ms ease;
     }
     .mark[aria-current="location"], .mark[data-motion="true"], .mark:focus-visible { color: #202123; }
+    .mark[aria-current="location"] { --dash-rest: .538462; }
     .mark[aria-current="location"] .dash { opacity: .7; }
     .mark[data-motion="true"] .dash, .mark:focus-visible .dash { opacity: 1; }
     :host([data-dark="true"]) .mark { color: #b4b4b8; }
     :host([data-dark="true"]) .mark[aria-current="location"], :host([data-dark="true"]) .mark[data-motion="true"] { color: #f3f3f3; }
     .rail[data-scrubbing="true"] .dash { transition-duration: 0ms; }
-    .bookmark-dot { position: absolute; right: calc(5px + 26px * var(--dash-scale, .230769)); top: calc(50% - 1px); width: 2px; height: 2px; border-radius: 50%; background: currentColor; transition: right 160ms ease-out; }
+    .bookmark-dot { position: absolute; right: calc(5px + 26px * var(--dash-scale, var(--dash-rest))); top: calc(50% - 1px); width: 2px; height: 2px; border-radius: 50%; background: currentColor; transition: right 160ms ease-out; }
     .tooltip {
       position: fixed;
       transform: translateY(-50%);
@@ -179,12 +181,15 @@
     .tooltip-attachments { margin-top: 6px; display: flex; gap: 6px; color: #777; font-size: 11px; }
     .attachment { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .history-control {
-      position: fixed; right: 11px; width: 38px; height: 24px; padding: 0;
-      display: flex; align-items: center; justify-content: center;
+      position: fixed; right: 11px; width: 38px; height: 24px; padding: 0 5px;
+      display: flex; align-items: center; justify-content: flex-end;
       border: 0; border-radius: 6px;
-      background: transparent; color: #777; pointer-events: auto; cursor: pointer;
-      font: 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      background: transparent; color: #8f949d; pointer-events: auto; cursor: pointer;
+      font: 11px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -.2px;
     }
+    .history-control[data-state="complete"] { font-size: 10px; }
     .history-control:hover, .history-control:focus-visible { background: rgba(128,128,128,.10); }
     .history-control[hidden] { display: none !important; }
     .diagnostics { position: fixed; right: 55px; bottom: 30px; width: min(355px, calc(100vw - 75px)); max-height: min(75vh, 620px); overflow: auto; padding: 12px; border-radius: 12px; border: 1px solid #ddd; background: #fff; color: #292929; box-shadow: 0 8px 30px #0002; pointer-events: auto; font: 12px/1.5 'Segoe UI','Microsoft YaHei',sans-serif; }
@@ -906,12 +911,13 @@
       for (let offset = -3; offset <= 3; offset++) affected.add(center + offset);
     }
     motionIndex = index;
-    const progress = [1, .7, .4, .2];
+    const widths = [26, 20, 16, 12];
     for (const at of affected) {
       const button = rail.children[at];
       if (!button) continue;
       const distance = index >= 0 ? Math.abs(at - index) : Infinity;
-      button.style.setProperty('--dash-scale', String((6 + 20 * (progress[distance] || 0)) / 26));
+      if (distance < widths.length) button.style.setProperty('--dash-scale', String(widths[distance] / 26));
+      else button.style.removeProperty('--dash-scale');
       button.dataset.motion = String(distance === 0);
     }
   }
@@ -1169,7 +1175,7 @@
     historyControl.textContent = nativeLoading ? 'Ⅱ' : historyTask ? historyTask.kind === 'index' ? 'Ⅱ' : '…' : historyComplete ? String(entries.length) : '↻';
     historyControl.setAttribute('aria-label', label);
     historyControl.title = `${navigationNotice ? navigationNotice + '。' : ''}${label}。右键查看诊断。Alt+↑/↓ 切换问题，拖动横线快速定位；悬停预览并收藏。`;
-    historyControl.style.top = `${Math.min(innerHeight - 38, (rail?.getBoundingClientRect().bottom || innerHeight / 2) + 8)}px`;
+    historyControl.style.top = `${Math.min(innerHeight - 30, (rail?.getBoundingClientRect().bottom || innerHeight / 2) - 4)}px`;
   }
 
   function cancelHistory(restore) {

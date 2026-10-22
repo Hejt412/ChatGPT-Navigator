@@ -1,7 +1,7 @@
 /* MAIN world：观察当前聊天 JSON，协调网页自身的历史加载器；不读取认证信息。 */
 (() => {
   'use strict';
-  const VERSION = '2.5.0';
+  const VERSION = '2.5.1';
   const model = window.__chatgptRailModel;
   if (!model) return;
   if (window.__chatgptRailBridge?.version === VERSION) return;

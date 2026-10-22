@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatGPT 右侧问题导航",
   "short_name": "ChatGPT 右侧导航",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "ChatGPT 问题导航：本地记住历史问题，再次进入即恢复目录；支持后台更新、回答预览、书签、键盘和拖动定位。",
   "icons": {
     "16": "icons/icon16.png",
