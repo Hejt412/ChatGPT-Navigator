@@ -1,6 +1,19 @@
 /* 为已打开的页面补上导航；更新后刷新一次页面，可在网页初始化时接入历史加载器。 */
 'use strict';
 
+if (typeof importScripts === 'function') importScripts('folder-storage.js');
+const memoryStorage = globalThis.__chatgptRailFolder?.create(chrome.storage.local);
+chrome.runtime.onMessage?.addListener((message, sender, sendResponse) => {
+  if (message?.channel !== 'chatgpt-navigator-memory' || sender.id !== chrome.runtime.id) return false;
+  if (!['get', 'set', 'remove', 'save-record', 'status', 'open-settings'].includes(message.action)) return false;
+  const operation = message.action === 'open-settings' ? () => chrome.runtime.openOptionsPage()
+    : message.action === 'save-record' ? () => memoryStorage.saveRecord(message.value?.key, message.value?.record)
+    : () => memoryStorage[message.action](message.value);
+  Promise.resolve().then(operation).then(value => sendResponse({ ok: true, value }), error =>
+    sendResponse({ ok: false, error: String(error.message || '保存位置不可用'), name: String(error.name || 'MemoryStorageError') }));
+  return true;
+});
+
 const CHATGPT_URLS = ['https://chatgpt.com/*', 'https://chat.openai.com/*'];
 
 async function injectRail(tabId) {

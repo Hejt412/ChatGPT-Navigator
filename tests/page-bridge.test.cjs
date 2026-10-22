@@ -136,7 +136,7 @@ test('diagnostics disclose only sanitized counters and do not start history load
   assert.equal(started,0);
   assert.equal(app.pending.length,0);
   assert.equal(app.messages[0].message.type,'diagnostics');
-  assert.equal(app.messages[0].message.diagnostics.bridgeVersion,'2.4.0');
+  assert.equal(app.messages[0].message.diagnostics.bridgeVersion,'2.5.0');
   assert.equal(app.messages[0].message.diagnostics.history.pagesTriggered,0);
 });
 

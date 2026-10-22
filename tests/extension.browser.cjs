@@ -37,9 +37,9 @@ const profile = fs.mkdtempSync(path.join(outputs, 'extension-profile-'));
       return text && JSON.parse(text).bridge.connected===true;
     });
     const diagnostic=JSON.parse(await diagnosticText.innerText());
-    assert.equal(diagnostic.navigatorVersion,'2.4.0');
+    assert.equal(diagnostic.navigatorVersion,'2.5.0');
     assert.equal(diagnostic.indexedQuestions,40);
-    assert.equal(diagnostic.bridge.bridgeVersion,'2.4.0');
+    assert.equal(diagnostic.bridge.bridgeVersion,'2.5.0');
     assert.ok(!JSON.stringify(diagnostic).includes('must-not-be-forwarded'));
     assert.ok(!JSON.stringify(diagnostic).includes('https://'));
     assert.ok(!JSON.stringify(diagnostic).includes('数据问题'));
@@ -91,5 +91,65 @@ const profile = fs.mkdtempSync(path.join(outputs, 'extension-profile-'));
     assert.equal(await page.evaluate(() => window.__chatgptRailMemory), undefined, '记忆模块留在扩展隔离上下文');
     assert.deepEqual(errors, []);
     console.log('PASS: actual MV3 reload restores all 40 questions and previews from local memory with zero repeated history pages or body scrolls');
+
+    const settings = await context.newPage();
+    settings.on('pageerror', error => errors.push(error.message));
+    const extensionOrigin = worker.url().slice(0, worker.url().lastIndexOf('/'));
+    await settings.goto(extensionOrigin + '/settings.html');
+    await settings.locator('#location').filter({hasText:'浏览器本地存储'}).waitFor();
+    assert.equal(await settings.evaluate(()=>typeof window.showDirectoryPicker),'function');
+    // 用真实 OPFS 目录句柄替代系统选择器，验证句柄跨页面 / 后台的 IndexedDB 序列化。
+    // 真正 D 盘写入由 folder-storage.test.cjs 验证；真实浏览器授权留给用户点击系统窗口。
+    await settings.evaluate(() => { window.showDirectoryPicker = () => navigator.storage.getDirectory(); });
+    await settings.getByRole('button',{name:'选择保存文件夹',exact:true}).click();
+    await settings.locator('#status').filter({hasText:'已切换到所选文件夹'}).waitFor();
+    const diskRecords = () => settings.evaluate(async () => {
+      const root=await navigator.storage.getDirectory(),dir=await root.getDirectoryHandle('navigator-data'),result=[];
+      for await(const entry of dir.values()) if(entry.kind==='file'&&entry.name.endsWith('.json')) {
+        const record=JSON.parse(await(await entry.getFile()).text());result.push({name:entry.name,count:record.entries.length});
+      }
+      return result;
+    });
+    assert.equal((await diskRecords()).length,3);
+    assert.ok((await diskRecords()).every(value=>value.count===40));
+    const afterMigration=await worker.evaluate(()=>chrome.storage.local.get(null));
+    assert.equal(Object.keys(afterMigration).filter(key=>key.startsWith('question-memory:')).length,0,'迁移后不在浏览器保留目录正文副本');
+    assert.deepEqual(afterMigration['question-bookmarks:extension-state'],['message:user-10']);
+    await settings.screenshot({path:path.join(outputs,'folder-settings-2.5.0.png'),fullPage:true});
+    await page.bringToFront();
+    await page.reload();
+    await page.waitForFunction(()=>document.getElementById('chatgpt-right-rail-extension')?.dataset.memory==='restored');
+    assert.equal(await marks.count(),40);
+    await page.waitForTimeout(1200);
+    assert.equal(await page.evaluate(()=>window.nativeHistoryCalls),0);
+    await marks.nth(10).click();
+    await page.waitForFunction(()=>{
+      const root=document.getElementById('chatgpt-right-rail-extension').shadowRoot;
+      return root.querySelector('[aria-current]')?.dataset.key==='message:user-10'&&root.querySelector('.history-control').dataset.state!=='seek';
+    },null,{timeout:10000}).catch(async error=>{
+      console.error('folder navigation state',await page.evaluate(()=>({
+        active:document.getElementById('chatgpt-right-rail-extension').shadowRoot.querySelector('[aria-current]')?.dataset.key,
+        status:document.getElementById('chatgpt-right-rail-extension').shadowRoot.querySelector('.history-control').title,
+        scroll:document.getElementById('chat-scroll').scrollTop,
+        live:[...document.querySelectorAll('[data-message-id]')].map(node=>node.dataset.messageId)
+      })));throw error;
+    });
+    await page.waitForTimeout(700);
+    assert.equal(Object.keys(await worker.evaluate(()=>chrome.storage.local.get(null))).filter(key=>key.startsWith('question-memory:')).length,0);
+    console.log('PASS: settings migration serializes a real directory handle; content scripts restore and save through the service worker without browser copies');
+
+    await settings.getByRole('button',{name:'使用浏览器存储',exact:true}).click();
+    await settings.locator('#status').filter({hasText:'已切回浏览器存储'}).waitFor();
+    assert.equal((await diskRecords()).length,3,'切回浏览器保留文件夹中的副本');
+    assert.equal(Object.keys(await worker.evaluate(()=>chrome.storage.local.get(null))).filter(key=>key.startsWith('question-memory:')).length,3);
+    await settings.getByRole('button',{name:'选择保存文件夹',exact:true}).click();
+    await settings.locator('#status').filter({hasText:'已切换到所选文件夹'}).waitFor();
+    await page.locator('#chatgpt-right-rail-extension .history-control').click({button:'right'});
+    await page.getByRole('button',{name:'清除全部导航记忆',exact:true}).click();
+    const clearedDeadline=Date.now()+5000;
+    while((await diskRecords()).length){if(Date.now()>clearedDeadline)throw new Error('folder memory was not cleared');await page.waitForTimeout(50);}
+    assert.deepEqual((await worker.evaluate(()=>chrome.storage.local.get(null)))['question-bookmarks:extension-state'],['message:user-10']);
+    assert.deepEqual(errors,[]);
+    console.log('PASS: settings can switch back, and clear-all removes only folder memory while preserving bookmarks');
   } finally { await context.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -76,3 +76,17 @@ test('clear is serialized after pending writes, with independent per-conversatio
   await controller.clearAll();
   assert.deepEqual(local.data, { 'question-bookmarks:chat': ['message:user-1'] });
 });
+
+test('runtime storage submits a complete save in one message and never falls back to browser storage on directory errors', async () => {
+  const local=storage(), messages=[];
+  const runtime={async sendMessage(message){messages.push(message);return{ok:true,value:message.value.record};}};
+  const adapter=memory.storage(local,runtime);
+  await memory.create(model,adapter).save(input());
+  assert.equal(messages.length,1);
+  assert.equal(messages[0].action,'save-record');
+  assert.equal(messages[0].value.record.entries.length,1);
+  assert.deepEqual(local.data,{});
+  runtime.sendMessage=async()=>({ok:false,name:'DirectoryPermissionRequired',error:'需要重新授权'});
+  await assert.rejects(adapter.get(memory.scopeKey(origin,'chat')),{name:'DirectoryPermissionRequired'});
+  assert.deepEqual(local.data,{});
+});

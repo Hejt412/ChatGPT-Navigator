@@ -84,6 +84,7 @@ test('toolbar injection errors are handled', async () => {
 test('manifest declares injection and toolbar entry points with site-scoped permissions', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   assert.equal(manifest.background.service_worker, 'background.js');
+  assert.equal(manifest.options_page,'settings.html');
   assert.ok(manifest.action.default_title);
   assert.deepEqual(manifest.permissions, ['scripting', 'storage']);
   assert.deepEqual(manifest.host_permissions, manifest.content_scripts[0].matches);

@@ -1,14 +1,15 @@
 /*
- * ChatGPT 问题导航 v2.4.0
+ * ChatGPT 问题导航 v2.5.0
  * 优先使用网页已加载的对话数据，只索引当前分支；页面扫描作为兼容方案。
  * 导航摘要按对话保存于扩展本地存储；历史分页由网页自身执行。
  */
 (() => {
   'use strict';
 
-  const VERSION = '2.4.0';
+  const VERSION = '2.5.0';
   const Model = window.__chatgptRailModel;
-  const Memory = window.__chatgptRailMemory?.create(Model, globalThis.chrome?.storage?.local);
+  const MemoryStore = window.__chatgptRailMemory?.storage(globalThis.chrome?.storage?.local, globalThis.chrome?.runtime);
+  const Memory = window.__chatgptRailMemory?.create(Model, MemoryStore);
   const DATA_CHANNEL = 'chatgpt-navigator-v2';
   const previousInstance = window.__chatgptRightRailLoaded;
   // 同版本只重新扫描；升级时替换旧实例，避免继续调用旧选择器。
@@ -580,7 +581,7 @@
 
   function updateMemoryStatus() {
     if (memoryStatus) memoryStatus.textContent = !Memory?.available ? '本地记忆暂不可用'
-      : memoryFailed ? '本地记忆操作未完成，当前目录仍可使用'
+      : memoryFailed ? '记忆保存位置暂不可用，请检查文件夹授权；当前目录仍可使用'
       : memoryPaused ? '记忆已清除，本次打开期间暂停保存'
       : memorySavedAt ? `已保存本地记忆 · ${entries.length} 个问题${memoryRestored ? ' · 本次从记忆恢复' : ''}`
       : '自动记住此对话的问题目录和预览摘要，仅保存在本浏览器';
@@ -635,7 +636,10 @@
       clearAll.disabled = !Memory?.available; clearAll.addEventListener('click', () => clearMemory(true));
       memoryResume = document.createElement('button'); memoryResume.type = 'button'; memoryResume.textContent = '恢复保存记忆';
       memoryResume.addEventListener('click', () => { memoryPaused = false; memoryContent = ''; updateMemoryStatus(); scheduleMemory(); });
-      diagnosticPanel.append(title, note, diagnosticText, copy, close, document.createElement('hr'), memoryTitle, memoryStatus, clearCurrent, clearAll, memoryResume);
+      const storageSettings = document.createElement('button'); storageSettings.type = 'button'; storageSettings.textContent = '记忆保存位置';
+      storageSettings.disabled = !MemoryStore?.openSettings;
+      storageSettings.addEventListener('click', () => { MemoryStore?.openSettings().catch(() => {}); });
+      diagnosticPanel.append(title, note, diagnosticText, copy, close, document.createElement('hr'), memoryTitle, memoryStatus, storageSettings, clearCurrent, clearAll, memoryResume);
       root.append(diagnosticPanel);
     }
     diagnosticPanel.hidden = false;

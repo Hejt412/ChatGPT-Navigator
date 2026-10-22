@@ -103,6 +103,8 @@
       save(input) {
         const key = scopeKey(input.origin, input.id), record = encode(model, input, clock());
         if (!storage?.set || !storage?.remove || !key || !record) return Promise.resolve(null);
+        // 后台单次完成写入及淘汰，页面关闭后仍可继续，不依赖内容脚本完成多轮消息。
+        if (storage.saveRecord) return storage.saveRecord(key, record);
         return enqueue(async () => {
           const all = await storage.get(null), remove = [];
           const records = [{ key, updatedAt: record.updatedAt, bytes: size(record) }];
@@ -136,5 +138,20 @@
     };
   }
 
-  return Object.freeze({ create, encode, decode, scopeKey, limits: Object.freeze({ TTL, MAX_RECORD, MAX_TOTAL, MAX_CONVERSATIONS }) });
+  function storage(local, runtime) {
+    if (!runtime?.sendMessage) return local;
+    const send = async (action, value) => {
+      const result = await runtime.sendMessage({ channel: 'chatgpt-navigator-memory', action, value });
+      if (!result?.ok) {
+        const error = new Error(result?.error || '本地记忆后台未连接，请重新加载扩展');
+        error.name = result?.name || 'MemoryStorageError'; throw error;
+      }
+      return result.value;
+    };
+    return { get: key => send('get', key), set: values => send('set', values), remove: keys => send('remove', keys),
+      saveRecord: (key, record) => send('save-record', { key, record }),
+      status: () => send('status'), openSettings: () => send('open-settings') };
+  }
+
+  return Object.freeze({ create, encode, decode, scopeKey, storage, limits: Object.freeze({ TTL, MAX_RECORD, MAX_TOTAL, MAX_CONVERSATIONS }) });
 });
