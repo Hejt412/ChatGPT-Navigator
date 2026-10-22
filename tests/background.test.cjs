@@ -42,7 +42,7 @@ test('install/update injects content into already open chats and skips discarded
   assert.deepEqual(app.injections.filter(item => item.world === 'ISOLATED').map(item => item.target.tabId), [1, 3]);
   assert.ok(app.injections.every(item => item.files[0] === 'conversation-model.js'));
   assert.ok(app.injections.filter(item => item.world === 'MAIN').every(item => item.files[1] === 'history-loader.js' && item.files[2] === 'page-state.js' && item.files[3] === 'page-bridge.js'));
-  assert.ok(app.injections.filter(item => item.world === 'ISOLATED').every(item => item.files[1] === 'content.js'));
+  assert.ok(app.injections.filter(item => item.world === 'ISOLATED').every(item => item.files[1] === 'navigation-memory.js' && item.files[2] === 'content.js'));
   app.injections.length = 0;
   await app.listeners.installed({ reason: 'update' });
   assert.deepEqual(app.injections.filter(item => item.world === 'ISOLATED').map(item => item.target.tabId), [1, 3]);
@@ -90,7 +90,7 @@ test('manifest declares injection and toolbar entry points with site-scoped perm
   assert.deepEqual(manifest.content_scripts[0].js, ['conversation-model.js', 'history-loader.js', 'page-state.js', 'page-bridge.js']);
   assert.equal(manifest.content_scripts[0].world, 'MAIN');
   assert.equal(manifest.content_scripts[0].run_at, 'document_start');
-  assert.deepEqual(manifest.content_scripts[1].js, ['conversation-model.js', 'content.js']);
+  assert.deepEqual(manifest.content_scripts[1].js, ['conversation-model.js', 'navigation-memory.js', 'content.js']);
   assert.equal(manifest.content_scripts[1].world, 'ISOLATED');
   assert.deepEqual(manifest.host_permissions, manifest.content_scripts[1].matches);
 });

@@ -1,13 +1,14 @@
 /*
- * ChatGPT 问题导航 v2.3.0
+ * ChatGPT 问题导航 v2.4.0
  * 优先使用网页已加载的对话数据，只索引当前分支；页面扫描作为兼容方案。
- * 消息索引只在内存中，本地书签只保存消息标识；历史分页由网页自身执行。
+ * 导航摘要按对话保存于扩展本地存储；历史分页由网页自身执行。
  */
 (() => {
   'use strict';
 
-  const VERSION = '2.3.0';
+  const VERSION = '2.4.0';
   const Model = window.__chatgptRailModel;
+  const Memory = window.__chatgptRailMemory?.create(Model, globalThis.chrome?.storage?.local);
   const DATA_CHANNEL = 'chatgpt-navigator-v2';
   const previousInstance = window.__chatgptRightRailLoaded;
   // 同版本只重新扫描；升级时替换旧实例，避免继续调用旧选择器。
@@ -80,6 +81,10 @@
   let diagnosticTimer = 0;
   let bridgeDiagnostics = null;
   let pendingNavigation = null;
+  let memoryTimer = 0, memoryLoading = false, memoryRestored = false, memoryPaused = false;
+  let memorySavedAt = 0, memoryFailed = false, memoryContent = '', memoryNeedsReload = false, memoryLiveSeen = false;
+  let memoryStatus = null, memoryResume = null;
+  let memoryFallback = null;
 
   const css = `
     :host { all: initial; position: fixed; inset: 0; z-index: 2147483000; pointer-events: none; color-scheme: light; }
@@ -501,13 +506,96 @@
       }
     }
     for (const item of overlay) result.push({ ...item, ordinal: result.length });
+    if (memoryFallback && !dataSnapshot.complete) {
+      const combined = mergeMemoryFallback(result, found);
+      if (combined) { historyComplete = memoryFallback.complete; return combined; }
+      memoryFallback = null;
+    }
     if (oldComplete !== historyComplete) updateHistoryControl();
     return result;
   }
 
+  function mergeMemoryFallback(fresh, found) {
+    const cached = memoryFallback.entries;
+    const signatureCounts = new Map();
+    for (const item of cached) signatureCounts.set(item.signature, (signatureCounts.get(item.signature) || 0) + 1);
+    const unique = entry => signatureCounts.get(entry.signature) === 1;
+    const matches = (old, next) => old.messageId && next.messageId && old.messageIdKind !== 'turn'
+      ? old.messageId === next.messageId || next.aliases?.includes(old.messageId)
+      : old.signature === next.signature && unique(old);
+    const pairs = fresh.map(item => cached.findIndex(old => matches(old, item)));
+    if (!pairs.some(index => index >= 0)) return null;
+    // 最新分支在共有问题之后改变时，截去旧分支的后缀，不能保留已删除的问题。
+    const lastMatch = pairs.findLastIndex(index => index >= 0), boundary = pairs[lastMatch];
+    const merged = cached.slice(0, boundary + 1).map(item => ({ ...item, target: null, message: null }));
+    for (let index = 0; index < fresh.length; index++) {
+      const item = fresh[index], at = pairs[index];
+      if (at >= 0) {
+        const old = merged[at];
+        if (old) merged[at] = { ...old, ...item, key: old.key,
+          position: item.positionKnown ? item.position : old.position, positionKnown: item.positionKnown || old.positionKnown };
+      } else if (index > lastMatch) merged.push(item);
+    }
+    // 仅用真实 ID 或唯一文本绑定回收后的 DOM；重复的无 ID 问题不猜测。
+    for (const [index, item] of merged.entries()) {
+      const dom = found.find(value => matches(item, value));
+      if (dom) Object.assign(item, { target: dom.target, message: dom.message, position: dom.position, positionKnown: true });
+      item.ordinal = index;
+    }
+    memoryFallback.entries = merged.map(item => ({ ...item, target: null, message: null }));
+    return merged;
+  }
+
   function requestSnapshot(force = false) {
-    if (!Model || !dataRouteId || disposed) return;
-    window.postMessage({ channel: DATA_CHANNEL, type: 'request', conversationId: dataRouteId, nonce: dataNonce, force: force === true }, location.origin);
+    if (!Model || !dataRouteId || disposed || memoryLoading) return;
+    if (force) memoryNeedsReload = true;
+    const skipHistory = memoryRestored && historyComplete && !memoryNeedsReload;
+    window.postMessage({ channel: DATA_CHANNEL, type: 'request', conversationId: dataRouteId, nonce: dataNonce, force: force === true,
+      skipHistory, knownMessageIds: memoryRestored ? entries.map(entry => entry.messageId).filter(Boolean).slice(0, 10000) : [] }, location.origin);
+  }
+
+  function scheduleMemory() {
+    if (!Memory?.available || memoryLoading || memoryPaused || !dataRouteId || !entries.length || disposed) return;
+    window.clearTimeout(memoryTimer);
+    memoryTimer = window.setTimeout(flushMemory, 500);
+  }
+
+  function flushMemory() {
+    window.clearTimeout(memoryTimer); memoryTimer = 0;
+    if (!Memory?.available || memoryLoading || memoryPaused || !dataRouteId || !entries.length || disposed) return;
+    const input = { origin: location.origin, id: dataRouteId, snapshot: memoryFallback ? null : dataSnapshot, entries, complete: historyComplete };
+    const packed = window.__chatgptRailMemory.encode(Model, input, 0);
+    if (!packed) { memoryFailed = true; updateMemoryStatus(); return; }
+    const content = JSON.stringify(packed), nonce = dataNonce;
+    if (content === memoryContent) return;
+    memoryContent = content;
+    Memory.save(input).then(record => {
+      if (disposed || nonce !== dataNonce || memoryPaused) return;
+      memorySavedAt = record?.updatedAt || 0; memoryFailed = !record; updateMemoryStatus();
+    }).catch(() => {
+      if (disposed || nonce !== dataNonce) return;
+      memoryFailed = true; memoryContent = ''; updateMemoryStatus();
+    });
+  }
+
+  function updateMemoryStatus() {
+    if (memoryStatus) memoryStatus.textContent = !Memory?.available ? '本地记忆暂不可用'
+      : memoryFailed ? '本地记忆操作未完成，当前目录仍可使用'
+      : memoryPaused ? '记忆已清除，本次打开期间暂停保存'
+      : memorySavedAt ? `已保存本地记忆 · ${entries.length} 个问题${memoryRestored ? ' · 本次从记忆恢复' : ''}`
+      : '自动记住此对话的问题目录和预览摘要，仅保存在本浏览器';
+    if (memoryResume) memoryResume.hidden = !memoryPaused;
+    updateDiagnostics();
+  }
+
+  async function clearMemory(all) {
+    if (!Memory?.available) return;
+    memoryPaused = true; memoryRestored = false; memorySavedAt = 0; memoryContent = ''; memoryFailed = false;
+    window.clearTimeout(memoryTimer); memoryTimer = 0;
+    const nonce = dataNonce;
+    updateMemoryStatus();
+    try { if (all) await Memory.clearAll(); else await Memory.clear(location.origin, dataRouteId); }
+    catch { if (nonce === dataNonce) { memoryFailed = true; updateMemoryStatus(); } }
   }
 
   function localDiagnostics() {
@@ -515,6 +603,8 @@
       indexedQuestions: entries.length, renderedQuestions: findEntries().length,
       source: dataSnapshot ? 'conversation-data' : 'rendered-page', complete: historyComplete,
       graphNodes: dataSnapshot?.nodes.length || 0, historyState: nativeHistoryState,
+      memory: { available: Memory?.available === true, restored: memoryRestored, paused: memoryPaused,
+        saved: memorySavedAt > 0, writeFailed: memoryFailed },
       bridge: bridgeDiagnostics || { connected: false, hint: '未收到主页面诊断响应，请重新加载扩展后刷新 ChatGPT' } };
   }
 
@@ -537,9 +627,19 @@
       });
       const close = document.createElement('button'); close.textContent = '关闭'; close.type = 'button';
       close.addEventListener('click', () => { diagnosticPanel.hidden = true; });
-      diagnosticPanel.append(title, note, diagnosticText, copy, close); root.append(diagnosticPanel);
+      const memoryTitle = document.createElement('strong'); memoryTitle.textContent = '本地导航记忆';
+      memoryStatus = document.createElement('p'); memoryStatus.className = 'memory-status';
+      const clearCurrent = document.createElement('button'); clearCurrent.type = 'button'; clearCurrent.textContent = '清除此对话记忆';
+      clearCurrent.disabled = !Memory?.available; clearCurrent.addEventListener('click', () => clearMemory(false));
+      const clearAll = document.createElement('button'); clearAll.type = 'button'; clearAll.textContent = '清除全部导航记忆';
+      clearAll.disabled = !Memory?.available; clearAll.addEventListener('click', () => clearMemory(true));
+      memoryResume = document.createElement('button'); memoryResume.type = 'button'; memoryResume.textContent = '恢复保存记忆';
+      memoryResume.addEventListener('click', () => { memoryPaused = false; memoryContent = ''; updateMemoryStatus(); scheduleMemory(); });
+      diagnosticPanel.append(title, note, diagnosticText, copy, close, document.createElement('hr'), memoryTitle, memoryStatus, clearCurrent, clearAll, memoryResume);
+      root.append(diagnosticPanel);
     }
     diagnosticPanel.hidden = false;
+    updateMemoryStatus();
     bridgeDiagnostics = null;
     updateDiagnostics();
     if (Model && dataRouteId) window.postMessage({ channel: DATA_CHANNEL, type: 'diagnose', conversationId: dataRouteId, nonce: dataNonce }, location.origin);
@@ -563,9 +663,32 @@
     if (diagnosticPanel) diagnosticPanel.hidden = true;
     dataRouteId = Model?.conversationId(location.href) || null;
     dataNonce = crypto.randomUUID();
+    memoryLoading = Memory?.available === true && !!dataRouteId;
+    memoryRestored = false; memoryPaused = false; memorySavedAt = 0; memoryFailed = false;
+    memoryContent = ''; memoryNeedsReload = false; memoryLiveSeen = false;
+    memoryFallback = null;
+    window.clearTimeout(memoryTimer); memoryTimer = 0;
     for (const timer of sourceTimers) window.clearTimeout(timer);
     lastSourceRequest = 0;
-    sourceTimers = [0, 250, 1000, 3500, 8000, 16000].map(delay => window.setTimeout(requestSnapshot, delay));
+    const id = dataRouteId, nonce = dataNonce;
+    const startSources = () => {
+      if (disposed || nonce !== dataNonce) return;
+      memoryLoading = false;
+      sourceTimers = [0, 250, 1000, 3500, 8000, 16000].map(delay => window.setTimeout(requestSnapshot, delay));
+    };
+    if (memoryLoading) Memory.load(location.origin, id).then(record => {
+      if (disposed || nonce !== dataNonce || Model?.conversationId(location.href) !== id || dataSnapshot || !record) return;
+      dataSnapshot = record.snapshot; entries = record.entries.map(entry => ({ ...entry, target: null, message: null }));
+      if (!dataSnapshot) memoryFallback = { entries: record.entries, complete: record.complete };
+      nextEntryKey = Math.max(nextEntryKey, ...entries.map(entry => Number(entry.key.match(/:(\d+)$/)?.[1]) || 0));
+      const last = dataSnapshot && Model.entriesFromSnapshot(dataSnapshot).at(-1);
+      dataBranchAnchor = last ? `${last.key}:${Model.signature(last.response || '')}` : '';
+      historyEnabled = !dataSnapshot; historyComplete = record.complete;
+      memoryRestored = true; memorySavedAt = record.updatedAt;
+      memoryLoading = false;
+      scanNow(); renderRail(); updateMemoryStatus();
+    }).catch(() => { if (nonce === dataNonce) memoryFailed = true; }).finally(startSources);
+    else startSources();
     loadBookmarks();
   }
 
@@ -611,7 +734,9 @@
     if (manualHistoryIndex && !snapshot.complete) return;
     // 历史分页 / 流式状态更新不能取消用户正在进行的消息定位。
     if (historyTask?.kind === 'index') cancelHistory(true);
-    dataSnapshot = snapshot;
+    dataSnapshot = memoryRestored && dataSnapshot && !snapshot.complete ? Model.mergeSnapshots(dataSnapshot, snapshot) : snapshot;
+    if (snapshot.complete) memoryFallback = null;
+    memoryLiveSeen = true;
     if (snapshot.complete) { nativeHistoryState = 'complete'; manualHistoryIndex = false; }
     scanNow();
   }
@@ -952,6 +1077,7 @@
     const rootChanged = conversationRoot && nextRoot && conversationRoot !== nextRoot;
     const containerChanged = cachedContainer && !cachedContainer.isConnected;
     if (routeChanged || rootChanged || containerChanged) {
+      if (routeChanged) flushMemory();
       cancelHistory(false);
       // SPA 会先更新 URL，再异步替换旧聊天 DOM。旧节点未移除前不能计入新对话。
       staleTargets = new Map(entries.filter(entry => entry.message?.isConnected).map(entry =>
@@ -974,7 +1100,8 @@
     );
     const anchorsChanged = next.some((item, i) => item.message !== entries[i]?.message);
     entries = next;
-    host.dataset.source = dataSnapshot ? 'conversation' : 'page';
+    host.dataset.source = memoryRestored && !memoryLiveSeen ? 'cache' : dataSnapshot ? 'conversation' : 'page';
+    host.dataset.memory = memoryRestored ? 'restored' : memorySavedAt ? 'saved' : 'empty';
     host.dataset.history = nativeHistoryState;
     if (changed) {
       renderRail();
@@ -987,6 +1114,7 @@
       queuePositionUpdate();
     }
     updateHistoryControl();
+    scheduleMemory();
     // 页面状态可能晚于内容脚本挂载。重试只读数据发现，不滚动聊天收集目录。
     if (!dataSnapshot && Model && Date.now() - lastSourceRequest > 2000) {
       lastSourceRequest = Date.now();
@@ -1324,6 +1452,7 @@
   window.addEventListener('popstate', scheduleScan);
   window.addEventListener('hashchange', scheduleScan);
   window.addEventListener('pageshow', scheduleScan);
+  window.addEventListener('pagehide', flushMemory);
   // ChatGPT 使用客户端路由：URL 变化时清空上一段对话的内存索引。
   const routeTimer = window.setInterval(() => {
     if (location.href !== lastUrl || (host && !host.isConnected)) scheduleScan();
@@ -1337,6 +1466,7 @@
   }
 
   function dispose() {
+    flushMemory();
     disposed = true;
     cancelHistory(false);
     hideTooltip();
@@ -1345,6 +1475,7 @@
     observer.disconnect();
     window.clearTimeout(scanTimer);
     window.clearTimeout(diagnosticTimer);
+    window.clearTimeout(memoryTimer);
     window.clearInterval(routeTimer);
     window.cancelAnimationFrame(scrollFrame);
     window.removeEventListener('scroll', queuePositionUpdate, true);
@@ -1355,6 +1486,7 @@
     window.removeEventListener('popstate', scheduleScan);
     window.removeEventListener('hashchange', scheduleScan);
     window.removeEventListener('pageshow', scheduleScan);
+    window.removeEventListener('pagehide', flushMemory);
     colorScheme.removeEventListener('change', updateTheme);
   }
 

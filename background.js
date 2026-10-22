@@ -12,7 +12,7 @@ async function injectRail(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
     world: 'ISOLATED',
-    files: ['conversation-model.js', 'content.js']
+    files: ['conversation-model.js', 'navigation-memory.js', 'content.js']
   });
 }
 

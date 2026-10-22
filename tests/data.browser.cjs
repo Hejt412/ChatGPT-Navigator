@@ -239,12 +239,12 @@ async function run() {
     await page.waitForTimeout(200);
     assert.ok(await tooltip.isVisible());
     fs.mkdirSync(path.join(project, 'test-results'), { recursive: true });
-    await page.screenshot({ path: path.join(project, 'test-results', 'navigator-2.3.0.png') });
+    await page.screenshot({ path: path.join(project, 'test-results', 'navigator-2.4.0.png') });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     assert.equal(await page.locator(`${host} .dash`).first().evaluate(node => getComputedStyle(node).transitionDuration), '0s');
     assert.deepEqual(failures, []);
     console.log('PASS: delayed React cache yields all 40 entries with zero indexing scrolls and zero requests; Codex-style hover wave, follow preview, reduced motion');
-    console.log('PASS: bootstrap fallback, no browser errors; preview saved to test-results/navigator-2.3.0.png');
+    console.log('PASS: bootstrap fallback, no browser errors; preview saved to test-results/navigator-2.4.0.png');
   } finally { await browser.close(); }
 }
 

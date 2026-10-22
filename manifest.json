@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "ChatGPT 右侧问题导航",
   "short_name": "ChatGPT 右侧导航",
-  "version": "2.3.0",
-  "description": "ChatGPT 问题导航：复用网页历史加载器补全目录，保留阅读位置；支持问题与回答预览、本地书签、键盘和拖动定位。",
+  "version": "2.4.0",
+  "description": "ChatGPT 问题导航：本地记住历史问题，再次进入即恢复目录；支持后台更新、回答预览、书签、键盘和拖动定位。",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -36,7 +36,7 @@
         "https://chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
-      "js": ["conversation-model.js", "content.js"],
+      "js": ["conversation-model.js", "navigation-memory.js", "content.js"],
       "world": "ISOLATED",
       "run_at": "document_idle"
     }

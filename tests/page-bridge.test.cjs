@@ -136,7 +136,7 @@ test('diagnostics disclose only sanitized counters and do not start history load
   assert.equal(started,0);
   assert.equal(app.pending.length,0);
   assert.equal(app.messages[0].message.type,'diagnostics');
-  assert.equal(app.messages[0].message.diagnostics.bridgeVersion,'2.3.0');
+  assert.equal(app.messages[0].message.diagnostics.bridgeVersion,'2.4.0');
   assert.equal(app.messages[0].message.diagnostics.history.pagesTriggered,0);
 });
 
@@ -158,4 +158,16 @@ test('native navigation validates the current user message and acknowledges only
   finish();await waitFor(()=>app.messages.some(item=>item.message.type==='navigation'));
   assert.equal(app.messages.at(-1).message.handled,true);
   assert.equal(app.messages.at(-1).message.requestId,'native-request-12345678');
+});
+
+test('a previously complete response does not hide newly committed page data when revalidating a restored directory', async () => {
+  const app=setup();
+  const pending=app.window.fetch('/backend-api/conversation/chat');app.pending[0].resolve(response('旧问题'));await pending;
+  await new Promise(resolve=>setTimeout(resolve,30));app.request();
+  app.window.__NEXT_DATA__={conversation:payload('过时的初始化内容')};app.request();
+  assert.equal(app.messages.at(-1).message.snapshot.nodes[0].text,'旧问题');
+  app.window.__chatgptRailPageState={read:()=>model.projectConversation(payload('已编辑的问题'),'chat')};
+  app.request();
+  assert.equal(app.messages.at(-1).message.snapshot.nodes[0].text,'已编辑的问题');
+  assert.equal(app.pending.length,1,'核对已有页面状态不应增加网络请求');
 });

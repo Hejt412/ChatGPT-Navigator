@@ -1,7 +1,7 @@
 /* 复用网页的历史加载器：只触发当前对话的分页观察回调，不读取认证信息、不滚动正文。 */
 (() => {
   'use strict';
-  const VERSION = '2.3.0';
+  const VERSION = '2.4.0';
   if (window.__chatgptRailHistory?.version === VERSION) return;
   window.__chatgptRailHistory?.dispose();
   const NativeObserver = window.IntersectionObserver;

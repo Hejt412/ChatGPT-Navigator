@@ -1,13 +1,14 @@
 /* MAIN world：观察当前聊天 JSON，协调网页自身的历史加载器；不读取认证信息。 */
 (() => {
   'use strict';
-  const VERSION = '2.3.0';
+  const VERSION = '2.4.0';
   const model = window.__chatgptRailModel;
   if (!model) return;
   if (window.__chatgptRailBridge?.version === VERSION) return;
   window.__chatgptRailBridge?.dispose();
   const CHANNEL = 'chatgpt-navigator-v2';
   let nonce = null, requestedId = null, cached = null, cacheSource = '', disposed = false;
+  let knownUserIds = new Set();
   let requestSequence = 0, acceptedSequence = 0;
   const originalFetch = window.fetch;
   const ResponseType = window.Response;
@@ -116,15 +117,17 @@
   }
 
   function discover(id) {
-    let snapshot = model.snapshotIn(window.__reactRouterContext?.state?.loaderData, id) || model.snapshotIn(window.__NEXT_DATA__, id);
+    const committed = window.__chatgptRailPageState?.read(model, document, id);
+    let snapshot = committed || model.snapshotIn(window.__reactRouterContext?.state?.loaderData, id) || model.snapshotIn(window.__NEXT_DATA__, id);
     if (!snapshot) {
       const script = document.getElementById('__NEXT_DATA__');
       if (script?.textContent) {
         try { snapshot = model.snapshotIn(JSON.parse(script.textContent), id); } catch { /* 非 JSON 不执行。 */ }
       }
     }
-    if (!snapshot) snapshot = window.__chatgptRailPageState?.read(model, document, id);
-    if (snapshot) publish(model.mergeSnapshots(cached, snapshot), 'bootstrap');
+    // 初始注水数据可能已经过时，不能覆盖网络响应；已提交组件状态可以校正编辑和分支。
+    if (!committed && cached?.conversationId === id && cacheSource === 'response' && cached.complete) return true;
+    if (snapshot) publish(snapshot.complete ? snapshot : model.mergeSnapshots(cached, snapshot), 'bootstrap');
     return cached?.conversationId === id && cached.complete;
   }
 
@@ -139,12 +142,14 @@
       if (requestedId) { counters.currentResponses = 0; counters.parsedSnapshots = 0; counters.lastHttpStatus = null; }
       if (cached?.conversationId !== id) { cached = null; cacheSource = ''; }
       requestedId = id;
+      knownUserIds = new Set();
     }
     nonce = message.nonce;
     if (message.type === 'navigate') {
       // 只允许定位当前消息图的可见用户消息；网页自己的动作负责挂载目标。
       if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(message.requestId) ||
-          typeof message.messageId !== 'string' || !cached || !model.entriesFromSnapshot(cached).some(entry => entry.messageId === message.messageId)) return;
+          typeof message.messageId !== 'string' || (!knownUserIds.has(message.messageId) &&
+            (!cached || !model.entriesFromSnapshot(cached).some(entry => entry.messageId === message.messageId)))) return;
       const replyNonce = nonce;
       const reply = handled => {
         if (!disposed && nonce === replyNonce && model.conversationId(location.href) === id) window.postMessage({
@@ -169,9 +174,16 @@
       return;
     }
     if (message.type === 'cancel') { window.__chatgptRailHistory?.cancel(id); return; }
-    if (cached?.conversationId === id && cacheSource === 'response' && cached.complete) { publish(cached); return; }
+    if (Array.isArray(message.knownMessageIds) && message.knownMessageIds.length <= 10000) {
+      knownUserIds = new Set(message.knownMessageIds.filter(value => typeof value === 'string' && value.length > 0 && value.length <= 240));
+    }
+    if (cached?.conversationId === id && cacheSource === 'response' && cached.complete) {
+      discover(id); publish(cached); return;
+    }
     if (discover(id)) return;
     if (cached?.conversationId === id) publish(cached);
+    // 完整本地目录已恢复时，只核对网页现有数据；不再次逐页读取全部旧历史。
+    if (message.skipHistory === true && message.force !== true) return;
     window.__chatgptRailHistory?.start(id, state => notifyStatus(id, state), () => {
       if (Date.now() - lastPageProbe > 700) { lastPageProbe = Date.now(); discover(id); }
       return cached?.conversationId === id && cached.complete;
